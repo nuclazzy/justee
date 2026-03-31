@@ -30,6 +30,10 @@ export default function Home() {
   const [roleplayFeedback, setRoleplayFeedback] = useState<
     null | "success" | "retry"
   >(null);
+  const [roleplayStep, setRoleplayStep] = useState(0);
+  const [roleplayHistory, setRoleplayHistory] = useState<
+    { speaker: string; line: string }[]
+  >([]);
 
   // Load progress from localStorage
   useEffect(() => {
@@ -84,34 +88,71 @@ export default function Home() {
     }
   }, []);
 
+  const resetRoleplay = useCallback(() => {
+    setRoleplayInput("");
+    setRoleplayFeedback(null);
+    setRoleplayStep(0);
+    setRoleplayHistory([]);
+  }, []);
+
   const handleBlockChange = useCallback(
     (idx: number) => {
       setActiveBlock(idx);
       setActiveMode("key");
       resetBlanks();
-      setRoleplayInput("");
-      setRoleplayFeedback(null);
+      resetRoleplay();
     },
-    [resetBlanks]
+    [resetBlanks, resetRoleplay]
   );
 
   const handleModeChange = useCallback(
     (mode: Mode) => {
       setActiveMode(mode);
       resetBlanks();
-      setRoleplayInput("");
-      setRoleplayFeedback(null);
+      resetRoleplay();
     },
-    [resetBlanks]
+    [resetBlanks, resetRoleplay]
   );
 
+  // Group roleplay lines into pairs: [대상자 question, 전도자 expected answer]
+  const roleplayPairs = (() => {
+    const pairs: { question: string; answer: string }[] = [];
+    const rp = block.roleplay;
+    for (let i = 0; i < rp.length; i++) {
+      if (rp[i].speaker === "대상자" && i + 1 < rp.length && rp[i + 1].speaker === "전도자") {
+        pairs.push({ question: rp[i].line, answer: rp[i + 1].line });
+        i++; // skip the 전도자 line
+      }
+    }
+    return pairs;
+  })();
+
   const checkRoleplay = useCallback(() => {
-    const keywords = block.keyLines.map((kl) => kl.text.substring(0, 8));
-    const matched = keywords.filter((kw) =>
-      roleplayInput.includes(kw.substring(0, 4))
+    const currentPair = roleplayPairs[roleplayStep];
+    if (!currentPair) return;
+    // Check if answer contains key phrases (first 4 chars of each sentence fragment)
+    const answerFragments = currentPair.answer
+      .split(/[.,!?·]/)
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 4);
+    const matched = answerFragments.filter((frag) =>
+      roleplayInput.includes(frag.substring(0, 4))
     );
     setRoleplayFeedback(matched.length >= 1 ? "success" : "retry");
-  }, [block.keyLines, roleplayInput]);
+  }, [roleplayPairs, roleplayStep, roleplayInput]);
+
+  const advanceRoleplay = useCallback(() => {
+    const currentPair = roleplayPairs[roleplayStep];
+    if (!currentPair) return;
+    setRoleplayHistory((prev) => [
+      ...prev,
+      { speaker: "대상자", line: currentPair.question },
+      { speaker: "전도자", line: roleplayInput },
+    ]);
+    setRoleplayStep((s) => s + 1);
+    setRoleplayInput("");
+    setRoleplayFeedback(null);
+  }, [roleplayPairs, roleplayStep, roleplayInput]);
 
   return (
     <div className="flex flex-col h-full max-w-lg mx-auto">
@@ -245,14 +286,19 @@ export default function Home() {
         {activeMode === "roleplay" && (
           <RoleplayMode
             block={block}
+            pairs={roleplayPairs}
+            step={roleplayStep}
+            history={roleplayHistory}
             input={roleplayInput}
             setInput={setRoleplayInput}
             feedback={roleplayFeedback}
             onCheck={checkRoleplay}
-            onReset={() => {
+            onAdvance={advanceRoleplay}
+            onRetry={() => {
               setRoleplayInput("");
               setRoleplayFeedback(null);
             }}
+            onReset={resetRoleplay}
           />
         )}
       </main>
@@ -456,106 +502,142 @@ function BlankQuestionCard({
 
 function RoleplayMode({
   block,
+  pairs,
+  step,
+  history,
   input,
   setInput,
   feedback,
   onCheck,
+  onAdvance,
+  onRetry,
   onReset,
 }: {
   block: Block;
+  pairs: { question: string; answer: string }[];
+  step: number;
+  history: { speaker: string; line: string }[];
   input: string;
   setInput: (s: string) => void;
   feedback: null | "success" | "retry";
   onCheck: () => void;
+  onAdvance: () => void;
+  onRetry: () => void;
   onReset: () => void;
 }) {
+  const isComplete = step >= pairs.length;
+  const currentPair = pairs[step];
+
   return (
     <div className="space-y-4">
       <p className="text-xs text-gray-500">
-        대상자의 말에 전도자로서 응답해 보세요
+        대상자의 말에 전도자로서 순서대로 응답해 보세요 ({isComplete ? pairs.length : step + 1}/{pairs.length})
       </p>
 
-      {/* Example conversation */}
-      {block.roleplay.map((rp, i) => (
+      {/* Conversation history */}
+      {history.map((entry, i) => (
         <div
           key={i}
           className={`rounded-xl p-3 ${
-            rp.speaker === "대상자"
+            entry.speaker === "대상자"
               ? "bg-gray-100 mr-8"
               : "bg-primary-light ml-8"
           }`}
         >
           <span
             className={`text-xs font-semibold ${
-              rp.speaker === "대상자" ? "text-gray-500" : "text-primary"
+              entry.speaker === "대상자" ? "text-gray-500" : "text-primary"
             }`}
           >
-            {rp.speaker}
+            {entry.speaker}
           </span>
           <p className="text-sm mt-1 leading-relaxed text-gray-800">
-            {rp.line}
+            {entry.line}
           </p>
         </div>
       ))}
 
-      {/* Divider */}
-      <div className="flex items-center gap-2">
-        <div className="flex-1 h-px bg-gray-200" />
-        <span className="text-xs text-gray-400">직접 연습하기</span>
-        <div className="flex-1 h-px bg-gray-200" />
-      </div>
-
-      {/* Practice prompt */}
-      <div className="bg-gray-100 rounded-xl p-3 mr-8">
-        <span className="text-xs font-semibold text-gray-500">대상자</span>
-        <p className="text-sm mt-1 leading-relaxed text-gray-800">
-          {block.roleplay[0]?.line}
-        </p>
-      </div>
-
-      {/* User input */}
-      <div className="ml-4">
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="전도자로서 응답을 입력하세요..."
-          rows={4}
-          className="w-full border border-gray-200 rounded-xl p-3 text-sm outline-none focus:border-primary resize-none bg-white"
-          disabled={feedback !== null}
-        />
-      </div>
-
-      {/* Feedback */}
-      {feedback === "success" && (
-        <div className="bg-primary-light text-primary-text rounded-xl p-3 text-sm">
-          잘하셨습니다! 핵심 내용이 포함되어 있습니다.
-        </div>
-      )}
-      {feedback === "retry" && (
-        <div className="bg-error text-error-text rounded-xl p-3 text-sm">
-          핵심 키워드가 부족합니다. 핵심 문장을 다시 확인해 보세요.
-        </div>
-      )}
-
-      {/* Actions */}
-      <div className="flex gap-2">
-        {feedback === null ? (
-          <button
-            onClick={onCheck}
-            disabled={!input.trim()}
-            className="flex-1 py-3 bg-primary text-white rounded-xl text-sm font-semibold active:bg-primary-dark disabled:opacity-40"
-          >
-            확인하기
-          </button>
-        ) : (
+      {/* Completion state */}
+      {isComplete && (
+        <>
+          <div className="bg-primary-light text-primary-text rounded-xl p-4 text-sm text-center">
+            모든 대화를 완료했습니다!
+          </div>
           <button
             onClick={onReset}
-            className="flex-1 py-3 bg-gray-200 text-gray-700 rounded-xl text-sm font-semibold"
+            className="w-full py-3 bg-gray-200 text-gray-700 rounded-xl text-sm font-semibold"
           >
-            다시 연습
+            처음부터 다시 연습
           </button>
-        )}
-      </div>
+        </>
+      )}
+
+      {/* Current question */}
+      {!isComplete && currentPair && (
+        <>
+          <div className="bg-gray-100 rounded-xl p-3 mr-8">
+            <span className="text-xs font-semibold text-gray-500">대상자</span>
+            <p className="text-sm mt-1 leading-relaxed text-gray-800">
+              {currentPair.question}
+            </p>
+          </div>
+
+          {/* User input */}
+          <div className="ml-4">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="전도자로서 응답을 입력하세요..."
+              rows={4}
+              className="w-full border border-gray-200 rounded-xl p-3 text-sm outline-none focus:border-primary resize-none bg-white"
+              disabled={feedback !== null}
+            />
+          </div>
+
+          {/* Feedback */}
+          {feedback === "success" && (
+            <div className="bg-primary-light text-primary-text rounded-xl p-3 text-sm">
+              잘하셨습니다! 핵심 내용이 포함되어 있습니다.
+            </div>
+          )}
+          {feedback === "retry" && (
+            <div className="bg-error text-error-text rounded-xl p-3 text-sm space-y-2">
+              <p>핵심 키워드가 부족합니다. 아래 모범 답안을 참고해 보세요.</p>
+              <div className="bg-white/50 rounded-lg p-2 text-xs leading-relaxed text-gray-700">
+                {currentPair.answer}
+              </div>
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="flex gap-2">
+            {feedback === null ? (
+              <button
+                onClick={onCheck}
+                disabled={!input.trim()}
+                className="flex-1 py-3 bg-primary text-white rounded-xl text-sm font-semibold active:bg-primary-dark disabled:opacity-40"
+              >
+                확인하기
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={onRetry}
+                  className="flex-1 py-3 bg-gray-200 text-gray-700 rounded-xl text-sm font-semibold"
+                >
+                  다시 입력
+                </button>
+                <button
+                  onClick={onAdvance}
+                  className="flex-1 py-3 bg-primary text-white rounded-xl text-sm font-semibold active:bg-primary-dark"
+                >
+                  {step + 1 < pairs.length ? "다음 대화" : "완료"}
+                </button>
+              </>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
