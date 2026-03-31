@@ -114,14 +114,17 @@ export default function Home() {
     [resetBlanks, resetRoleplay]
   );
 
-  // Group roleplay lines into pairs: [대상자 question, 전도자 expected answer]
+  // Group roleplay lines into pairs: [전도자 expected line, 대상자 response (optional)]
   const roleplayPairs = (() => {
-    const pairs: { question: string; answer: string }[] = [];
+    const pairs: { expected: string; response: string | null }[] = [];
     const rp = block.roleplay;
     for (let i = 0; i < rp.length; i++) {
-      if (rp[i].speaker === "대상자" && i + 1 < rp.length && rp[i + 1].speaker === "전도자") {
-        pairs.push({ question: rp[i].line, answer: rp[i + 1].line });
-        i++; // skip the 전도자 line
+      if (rp[i].speaker === "전도자") {
+        const response = (i + 1 < rp.length && rp[i + 1].speaker === "대상자")
+          ? rp[i + 1].line
+          : null;
+        pairs.push({ expected: rp[i].line, response });
+        if (response !== null) i++; // skip the 대상자 line
       }
     }
     return pairs;
@@ -131,7 +134,7 @@ export default function Home() {
     const currentPair = roleplayPairs[roleplayStep];
     if (!currentPair) return;
     // Check if answer contains key phrases (first 4 chars of each sentence fragment)
-    const answerFragments = currentPair.answer
+    const answerFragments = currentPair.expected
       .split(/[.,!?·]/)
       .map((s) => s.trim())
       .filter((s) => s.length >= 4);
@@ -147,8 +150,8 @@ export default function Home() {
     if (!currentPair) return;
     setRoleplayHistory((prev) => [
       ...prev,
-      { speaker: "대상자", line: currentPair.question },
       { speaker: "전도자", line: roleplayInput },
+      ...(currentPair.response ? [{ speaker: "대상자", line: currentPair.response }] : []),
     ]);
     setRoleplayStep((s) => s + 1);
     setRoleplayInput("");
@@ -525,7 +528,7 @@ function RoleplayMode({
   onReset,
 }: {
   block: Block;
-  pairs: { question: string; answer: string }[];
+  pairs: { expected: string; response: string | null }[];
   step: number;
   history: { speaker: string; line: string }[];
   input: string;
@@ -542,7 +545,7 @@ function RoleplayMode({
   return (
     <div className="space-y-4">
       <p className="text-xs text-gray-500">
-        대상자의 말에 전도자로서 순서대로 응답해 보세요 ({isComplete ? pairs.length : step + 1}/{pairs.length})
+        전도자로서 순서대로 말해 보세요 ({isComplete ? pairs.length : step + 1}/{pairs.length})
       </p>
 
       {/* Conversation history */}
@@ -583,22 +586,16 @@ function RoleplayMode({
         </>
       )}
 
-      {/* Current question */}
+      {/* Current turn - user types as 전도자 */}
       {!isComplete && currentPair && (
         <>
-          <div className="bg-gray-100 rounded-xl p-3 mr-8">
-            <span className="text-xs font-semibold text-gray-500">대상자</span>
-            <p className="text-sm mt-1 leading-relaxed text-gray-800">
-              {currentPair.question}
-            </p>
-          </div>
-
-          {/* User input */}
+          {/* User input area */}
           <div className="ml-4">
+            <div className="text-xs font-semibold text-primary mb-1">전도자 (내 차례)</div>
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="전도자로서 응답을 입력하세요..."
+              placeholder="전도자로서 말할 내용을 입력하세요..."
               rows={4}
               className="w-full border border-gray-200 rounded-xl p-3 text-sm outline-none focus:border-primary resize-none bg-white"
               disabled={feedback !== null}
@@ -615,7 +612,7 @@ function RoleplayMode({
             <div className="bg-error text-error-text rounded-xl p-3 text-sm space-y-2">
               <p>핵심 키워드가 부족합니다. 아래 모범 답안을 참고해 보세요.</p>
               <div className="bg-white/50 rounded-lg p-2 text-xs leading-relaxed text-gray-700">
-                {currentPair.answer}
+                {currentPair.expected}
               </div>
             </div>
           )}
