@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { blocks } from "@/data/blocks";
 import type { Block, BlankQuestion } from "@/data/blocks";
 import { generateBlanksFromScript } from "@/utils/generateBlanks";
@@ -456,99 +456,6 @@ function RoleplayMode({
   onCheck: () => void;
   onReset: () => void;
 }) {
-  const [inputMode, setInputMode] = useState<"text" | "voice">("text");
-  const [isListening, setIsListening] = useState(false);
-  const [speechSupported, setSpeechSupported] = useState(false);
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
-  const inputRef = useRef(input);
-
-  // Keep ref in sync with latest input value
-  useEffect(() => {
-    inputRef.current = input;
-  }, [input]);
-
-  useEffect(() => {
-    const supported =
-      typeof window !== "undefined" &&
-      ("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
-    setSpeechSupported(supported);
-  }, []);
-
-  const startListening = useCallback(() => {
-    if (!speechSupported) return;
-
-    // Stop any existing recognition first
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-      recognitionRef.current = null;
-    }
-
-    const SpeechRecognitionCtor =
-      window.SpeechRecognition || window.webkitSpeechRecognition;
-    const recognition = new SpeechRecognitionCtor();
-    recognition.lang = "ko-KR";
-    recognition.continuous = false;
-    recognition.interimResults = true;
-
-    recognition.onresult = (event: SpeechRecognitionEvent) => {
-      let transcript = "";
-      for (let i = 0; i < event.results.length; i++) {
-        transcript += event.results[i][0].transcript;
-      }
-      // Append to existing text using ref for latest value
-      const base = inputRef.current;
-      const separator = base && !base.endsWith(" ") ? " " : "";
-      setInput(base + separator + transcript);
-    };
-
-    recognition.onerror = (e: Event) => {
-      const errorEvent = e as Event & { error?: string };
-      // "no-speech" is not a real error, just no input detected
-      if (errorEvent.error !== "no-speech") {
-        setIsListening(false);
-      }
-    };
-
-    recognition.onend = () => {
-      setIsListening(false);
-    };
-
-    recognitionRef.current = recognition;
-
-    try {
-      recognition.start();
-      setIsListening(true);
-    } catch {
-      // Already started or other error
-      setIsListening(false);
-    }
-  }, [speechSupported, setInput]);
-
-  const stopListening = useCallback(() => {
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.stop();
-      } catch {
-        // Ignore errors on stop
-      }
-      recognitionRef.current = null;
-    }
-    setIsListening(false);
-  }, []);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.stop();
-        } catch {
-          // Ignore
-        }
-      }
-    };
-  }, []);
-
   return (
     <div className="space-y-4">
       <p className="text-xs text-gray-500">
@@ -585,35 +492,6 @@ function RoleplayMode({
         <div className="flex-1 h-px bg-gray-200" />
       </div>
 
-      {/* Input mode toggle */}
-      {speechSupported && (
-        <div className="flex bg-gray-100 rounded-lg p-0.5">
-          <button
-            onClick={() => {
-              setInputMode("text");
-              stopListening();
-            }}
-            className={`flex-1 py-2 text-xs font-medium rounded-md transition-colors ${
-              inputMode === "text"
-                ? "bg-white text-gray-900 shadow-sm"
-                : "text-gray-500"
-            }`}
-          >
-            타이핑
-          </button>
-          <button
-            onClick={() => setInputMode("voice")}
-            className={`flex-1 py-2 text-xs font-medium rounded-md transition-colors ${
-              inputMode === "voice"
-                ? "bg-white text-gray-900 shadow-sm"
-                : "text-gray-500"
-            }`}
-          >
-            음성인식
-          </button>
-        </div>
-      )}
-
       {/* Practice prompt */}
       <div className="bg-gray-100 rounded-xl p-3 mr-8">
         <span className="text-xs font-semibold text-gray-500">대상자</span>
@@ -622,78 +500,16 @@ function RoleplayMode({
         </p>
       </div>
 
-      {/* User input area */}
+      {/* User input */}
       <div className="ml-4">
-        {inputMode === "text" ? (
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="전도자로서 응답을 입력하세요..."
-            rows={4}
-            className="w-full border border-gray-200 rounded-xl p-3 text-sm outline-none focus:border-primary resize-none bg-white"
-            disabled={feedback !== null}
-          />
-        ) : (
-          <div className="space-y-3">
-            {/* Voice input display */}
-            <div
-              className={`w-full min-h-[100px] border rounded-xl p-3 text-sm bg-white ${
-                isListening ? "border-primary" : "border-gray-200"
-              }`}
-            >
-              {input ? (
-                <p className="text-gray-800 leading-relaxed">{input}</p>
-              ) : (
-                <p className="text-gray-400">
-                  {isListening
-                    ? "듣고 있습니다..."
-                    : "마이크 버튼을 눌러 말씀하세요"}
-                </p>
-              )}
-            </div>
-
-            {/* Mic button */}
-            {feedback === null && (
-              <div className="flex justify-center">
-                <button
-                  onClick={isListening ? stopListening : startListening}
-                  className={`w-16 h-16 rounded-full flex items-center justify-center transition-all ${
-                    isListening
-                      ? "bg-red-500 text-white animate-pulse"
-                      : "bg-primary text-white active:bg-primary-dark"
-                  }`}
-                >
-                  {isListening ? (
-                    <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
-                      <rect x="6" y="6" width="12" height="12" rx="2" />
-                    </svg>
-                  ) : (
-                    <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-                      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                      <line x1="12" x2="12" y1="19" y2="22" />
-                    </svg>
-                  )}
-                </button>
-              </div>
-            )}
-            <p className="text-xs text-gray-400 text-center">
-              {isListening
-                ? "말씀을 멈추시면 자동으로 인식됩니다"
-                : input
-                ? "다시 탭하면 이어서 녹음됩니다"
-                : "탭하여 음성 입력 시작"}
-            </p>
-            {input && !isListening && feedback === null && (
-              <button
-                onClick={() => setInput("")}
-                className="w-full py-2 text-xs text-gray-400 underline"
-              >
-                입력 내용 지우기
-              </button>
-            )}
-          </div>
-        )}
+        <textarea
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="전도자로서 응답을 입력하세요..."
+          rows={4}
+          className="w-full border border-gray-200 rounded-xl p-3 text-sm outline-none focus:border-primary resize-none bg-white"
+          disabled={feedback !== null}
+        />
       </div>
 
       {/* Feedback */}
@@ -712,10 +528,7 @@ function RoleplayMode({
       <div className="flex gap-2">
         {feedback === null ? (
           <button
-            onClick={() => {
-              stopListening();
-              onCheck();
-            }}
+            onClick={onCheck}
             disabled={!input.trim()}
             className="flex-1 py-3 bg-primary text-white rounded-xl text-sm font-semibold active:bg-primary-dark disabled:opacity-40"
           >
