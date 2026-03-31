@@ -19,7 +19,6 @@ export default function Home() {
   const [activeMode, setActiveMode] = useState<Mode>("key");
   const [completed, setCompleted] = useState<boolean[]>([]);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
-  const [showMusic, setShowMusic] = useState(false);
 
   // Blank mode state
   const [blankAnswers, setBlankAnswers] = useState<Record<string, string>>({});
@@ -119,8 +118,10 @@ export default function Home() {
       {/* Header */}
       <header className="bg-primary text-white px-4 py-3 flex-shrink-0">
         <div className="flex items-center justify-between">
-          <button
-            onClick={() => setShowMusic(true)}
+          <a
+            href="https://suno.com/playlist/25809e27-6018-485a-92d2-915312af3f74"
+            target="_blank"
+            rel="noopener noreferrer"
             className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/20 transition-colors"
             title="암기 송"
           >
@@ -129,7 +130,7 @@ export default function Home() {
               <circle cx="6" cy="18" r="3" />
               <circle cx="18" cy="16" r="3" />
             </svg>
-          </button>
+          </a>
           <h1 className="text-lg font-bold text-center">JUST EE 전도폭발 암기</h1>
           <button
             onClick={() => setShowResetConfirm(true)}
@@ -175,44 +176,6 @@ export default function Home() {
               >
                 초기화
               </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Music modal */}
-      {showMusic && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex flex-col">
-          <div className="flex items-center justify-between px-4 py-3 bg-primary text-white">
-            <h3 className="text-base font-bold">암기 송</h3>
-            <button
-              onClick={() => setShowMusic(false)}
-              className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/20"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="18" y1="6" x2="6" y2="18" />
-                <line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
-            </button>
-          </div>
-          <div className="flex-1 w-full bg-white flex flex-col">
-            <iframe
-              src="https://suno.com/playlist/25809e27-6018-485a-92d2-915312af3f74"
-              className="flex-1 w-full"
-              allow="autoplay; encrypted-media"
-            />
-            <div className="p-4 border-t border-gray-200 text-center">
-              <p className="text-xs text-gray-400 mb-2">
-                재생이 되지 않으면 아래 버튼을 눌러주세요
-              </p>
-              <a
-                href="https://suno.com/playlist/25809e27-6018-485a-92d2-915312af3f74"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-block px-6 py-2.5 bg-primary text-white text-sm font-semibold rounded-xl"
-              >
-                Suno에서 열기
-              </a>
             </div>
           </div>
         </div>
