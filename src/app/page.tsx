@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { blocks } from "@/data/blocks";
-import type { Block, BlankQuestion, KeyLine } from "@/data/blocks";
+import type { Block, KeyLine } from "@/data/blocks";
 
 type Mode = "key" | "full" | "blank" | "roleplay";
 
@@ -15,50 +15,49 @@ const SKIP_WORDS = new Set([
   "위하여", "때문에", "통해", "위해", "대한", "위해서",
 ]);
 
-/** 핵심문장(keyLines)에서 중요 단어를 랜덤 빈칸으로 만드는 함수 */
-function generateBlanksFromKeyLines(keyLines: KeyLine[]): BlankQuestion[] {
-  // 셔플 후 최대 4개 선택
-  const shuffled = [...keyLines].sort(() => Math.random() - 0.5);
-  const selected = shuffled.slice(0, Math.min(4, shuffled.length));
+/** 핵심문장(keyLines)에서 중요 단어를 랜덤 빈칸으로 만드는 함수 (전문 표시용) */
+type BlankWordInfo = { word: string; label: string; keyLineIdx: number };
+type FullScriptBlankData = {
+  blanks: BlankWordInfo[];
+  answers: Record<string, string>;
+  anchorsByKeyLine: string[][];
+};
 
-  return selected.map((kl) => {
-    const text = kl.text.replace(/\([^)]+\)/g, "").trim(); // 행동 지시 제거
+function generateFullScriptBlanks(keyLines: KeyLine[]): FullScriptBlankData {
+  const blanks: BlankWordInfo[] = [];
+  const answers: Record<string, string> = {};
+  const anchorsByKeyLine: string[][] = [];
+  let labelIdx = 0;
+  const labels = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+  for (let ki = 0; ki < keyLines.length; ki++) {
+    const text = keyLines[ki].text.replace(/\([^)]+\)/g, "").trim();
     const tokens = text.split(/\s+/);
 
-    // 빈칸 후보: 2글자 이상, SKIP_WORDS에 없는 단어
-    const candidates: number[] = [];
-    tokens.forEach((token, idx) => {
-      const clean = token.replace(/["""''.,!?;:()【】]/g, "");
-      if (clean.length >= 2 && !SKIP_WORDS.has(clean)) {
-        candidates.push(idx);
-      }
-    });
+    const significant = tokens
+      .map((t) => t.replace(/["""''.,!?;:()【】]/g, ""))
+      .filter((w) => w.length >= 3 && !SKIP_WORDS.has(w));
+    // 매칭용 앵커 단어 (긴 순)
+    anchorsByKeyLine.push(
+      [...significant].sort((a, b) => b.length - a.length).slice(0, 6)
+    );
 
-    // 랜덤으로 1~2개 빈칸 선택
-    const blankCount = Math.min(candidates.length >= 3 ? 2 : 1, candidates.length);
-    const selectedIndices = [...candidates]
+    // 빈칸 후보
+    const candidates = tokens
+      .map((t) => t.replace(/["""''.,!?;:()【】]/g, ""))
+      .filter((w) => w.length >= 2 && !SKIP_WORDS.has(w));
+    const count = Math.min(candidates.length >= 3 ? 2 : 1, candidates.length);
+    const selected = [...candidates]
       .sort(() => Math.random() - 0.5)
-      .slice(0, blankCount)
-      .sort((a, b) => a - b);
+      .slice(0, count);
 
-    const answers: Record<string, string> = {};
-    const labels = ["A", "B", "C"];
-
-    const resultTokens = tokens.map((token, idx) => {
-      const labelIdx = selectedIndices.indexOf(idx);
-      if (labelIdx === -1) return token;
-
-      const clean = token.replace(/["""''.,!?;:()【】]/g, "");
-      const prefix = token.match(/^["""''(【]*/)?.[0] || "";
-      const suffix = token.slice(prefix.length + clean.length);
-      const label = labels[labelIdx];
-      answers[label] = clean;
-
-      return `${prefix}[${label}]${suffix}`;
-    });
-
-    return { text: resultTokens.join(" "), answers };
-  });
+    for (const word of selected) {
+      const label = labels[labelIdx++];
+      blanks.push({ word, label, keyLineIdx: ki });
+      answers[label] = word;
+    }
+  }
+  return { blanks, answers, anchorsByKeyLine };
 }
 
 const MODE_LABELS: Record<Mode, string> = {
@@ -506,29 +505,158 @@ function BlankMode({
   onReset: () => void;
   seed: number;
 }) {
-  // seed가 바뀔 때마다 핵심문장에서 새로운 랜덤 빈칸 문제 생성
-  const [questions, setQuestions] = useState<BlankQuestion[]>([]);
+  const [blankData, setBlankData] = useState<FullScriptBlankData>({
+    blanks: [],
+    answers: {},
+    anchorsByKeyLine: [],
+  });
+
+  // 각 fullScript 라인 → 매칭된 keyLine 인덱스 (1:1 매칭, 가장 높은 점수 우선)
+  const [lineKeyLineMap, setLineKeyLineMap] = useState<Map<number, number>>(
+    new Map()
+  );
 
   useEffect(() => {
-    setQuestions(generateBlanksFromKeyLines(block.keyLines));
-  }, [block.fullScript, seed]);
+    const data = generateFullScriptBlanks(block.keyLines);
+    setBlankData(data);
+
+    // 각 keyLine에 대해 가장 잘 매칭되는 fullScript 라인을 1개만 선정
+    const lines = block.fullScript.split("\n");
+    const map = new Map<number, number>();
+    const usedLines = new Set<number>();
+
+    for (let ki = 0; ki < data.anchorsByKeyLine.length; ki++) {
+      const anchors = data.anchorsByKeyLine[ki];
+      if (anchors.length === 0) continue;
+
+      let bestLine = -1;
+      let bestScore = 0;
+      for (let li = 0; li < lines.length; li++) {
+        if (usedLines.has(li)) continue;
+        const clean = lines[li].trim().replace(/^(전|대|훈\d?):\s*/, "").trim();
+        if (clean.length < 10) continue;
+        const score = anchors.filter((w) => clean.includes(w)).length;
+        if (score > bestScore) {
+          bestScore = score;
+          bestLine = li;
+        }
+      }
+      // 최소 60% 앵커 매칭 필요
+      if (bestLine >= 0 && bestScore >= Math.ceil(anchors.length * 0.6)) {
+        map.set(bestLine, ki);
+        usedLines.add(bestLine);
+      }
+    }
+    setLineKeyLineMap(map);
+  }, [block.keyLines, block.fullScript, seed]);
+
+  // 라인 텍스트에서 빈칸 단어를 input으로 치환하여 렌더링
+  const renderLineWithBlanks = (lineText: string, ki: number) => {
+    const lineBlanks = blankData.blanks.filter((b) => b.keyLineIdx === ki);
+    if (lineBlanks.length === 0) return <span>{lineText}</span>;
+
+    // 빈칸 단어를 플레이스홀더로 교체
+    let processed = lineText;
+    const activeBlanks: BlankWordInfo[] = [];
+    for (const blank of lineBlanks) {
+      if (processed.includes(blank.word)) {
+        processed = processed.replace(blank.word, `\x00${blank.label}\x00`);
+        activeBlanks.push(blank);
+      }
+    }
+    if (activeBlanks.length === 0) return <span>{lineText}</span>;
+
+    const parts = processed.split("\x00");
+    return parts.map((part, i) => {
+      const blank = activeBlanks.find((b) => b.label === part);
+      if (!blank) return <span key={i}>{part}</span>;
+
+      const correctAnswer = blankData.answers[blank.label];
+      const userAnswer = answers[blank.label] || "";
+      const isCorrect = checked && userAnswer.trim() === correctAnswer;
+      const isWrong = checked && userAnswer.trim() !== correctAnswer;
+
+      return (
+        <span key={i} className="inline-flex items-center mx-0.5">
+          <input
+            type="text"
+            value={userAnswer}
+            onChange={(e) =>
+              setAnswers({ ...answers, [blank.label]: e.target.value })
+            }
+            disabled={checked}
+            placeholder={`(${blank.label})`}
+            className={`border-b-2 text-center text-sm py-0.5 outline-none bg-transparent transition-colors ${
+              !checked
+                ? "border-primary focus:border-primary-dark"
+                : isCorrect
+                ? "border-green-500 text-green-700 font-semibold"
+                : "border-red-400 text-red-600"
+            }`}
+            style={{
+              width: `${correctAnswer.length * 18 + 20}px`,
+              minWidth: "50px",
+            }}
+          />
+          {isWrong && (
+            <span className="text-xs text-red-500 ml-1">
+              ({correctAnswer})
+            </span>
+          )}
+        </span>
+      );
+    });
+  };
+
+  const lines = block.fullScript.split("\n");
 
   return (
-    <div className="space-y-4">
-      <p className="text-xs text-gray-500">
-        핵심 문장에서 랜덤 출제됩니다. 빈칸에 알맞은 단어를 입력하세요.
+    <div className="space-y-1">
+      <p className="text-xs text-gray-500 mb-3">
+        전문을 읽으며 핵심 문장의 빈칸을 채워 보세요. 빈칸은 매번 랜덤 배치됩니다.
       </p>
-      {questions.map((q, qi) => (
-        <BlankQuestionCard
-          key={`${seed}-${qi}`}
-          question={q}
-          questionIndex={qi}
-          answers={answers}
-          setAnswers={setAnswers}
-          checked={checked}
-        />
-      ))}
-      <div className="flex gap-2">
+      <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100 space-y-1">
+        {lines.map((line, i) => {
+          const trimmed = line.trim();
+          if (!trimmed) return <div key={i} className="h-3" />;
+
+          const isNarrator = trimmed.startsWith("전:");
+          const isTarget = trimmed.startsWith("대:");
+          const ki = lineKeyLineMap.get(i) ?? null;
+          const hasBlanks =
+            ki !== null &&
+            blankData.blanks.some((b) => b.keyLineIdx === ki);
+
+          if (hasBlanks && ki !== null) {
+            return (
+              <div
+                key={i}
+                className="bg-primary-light rounded-lg px-2 py-1.5 -mx-1"
+              >
+                <p className="text-sm leading-loose text-primary-dark font-medium flex flex-wrap items-center">
+                  {renderLineWithBlanks(trimmed, ki)}
+                </p>
+              </div>
+            );
+          }
+
+          return (
+            <p
+              key={i}
+              className={`text-sm leading-relaxed ${
+                isNarrator
+                  ? "text-primary-dark font-medium"
+                  : isTarget
+                  ? "text-gray-400 italic"
+                  : "text-gray-700"
+              }`}
+            >
+              {trimmed}
+            </p>
+          );
+        })}
+      </div>
+      <div className="flex gap-2 pt-3">
         {!checked ? (
           <button
             onClick={onCheck}
@@ -544,71 +672,6 @@ function BlankMode({
             새 문제 풀기
           </button>
         )}
-      </div>
-    </div>
-  );
-}
-
-function BlankQuestionCard({
-  question,
-  questionIndex,
-  answers,
-  setAnswers,
-  checked,
-}: {
-  question: BlankQuestion;
-  questionIndex: number;
-  answers: Record<string, string>;
-  setAnswers: (a: Record<string, string>) => void;
-  checked: boolean;
-}) {
-  const parts = question.text.split(/(\[[A-Z]\])/g);
-
-  return (
-    <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
-      <div className="text-sm leading-loose flex flex-wrap items-center gap-y-1">
-        {parts.map((part, i) => {
-          const match = part.match(/^\[([A-Z])\]$/);
-          if (!match) return <span key={i}>{part}</span>;
-
-          const key = `${questionIndex}-${match[1]}`;
-          const correctAnswer = question.answers[match[1]];
-          const userAnswer = answers[key] || "";
-          const isCorrect =
-            checked && userAnswer.trim() === correctAnswer;
-          const isWrong =
-            checked && userAnswer.trim() !== correctAnswer;
-
-          return (
-            <span key={i} className="inline-flex items-center mx-0.5">
-              <input
-                type="text"
-                value={userAnswer}
-                onChange={(e) =>
-                  setAnswers({ ...answers, [key]: e.target.value })
-                }
-                disabled={checked}
-                placeholder="___"
-                className={`border-b-2 text-center text-sm py-0.5 outline-none bg-transparent transition-colors ${
-                  !checked
-                    ? "border-gray-300 focus:border-primary"
-                    : isCorrect
-                    ? "border-green-500 text-green-700 font-semibold"
-                    : "border-red-400 text-red-600"
-                }`}
-                style={{
-                  width: `${correctAnswer.length * 18 + 20}px`,
-                  minWidth: "50px",
-                }}
-              />
-              {isWrong && (
-                <span className="text-xs text-red-500 ml-1">
-                  ({correctAnswer})
-                </span>
-              )}
-            </span>
-          );
-        })}
       </div>
     </div>
   );
