@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { blocks } from "@/data/blocks";
 import type { Block, BlankQuestion } from "@/data/blocks";
 
@@ -17,6 +17,7 @@ export default function Home() {
   const [activeBlock, setActiveBlock] = useState(0);
   const [activeMode, setActiveMode] = useState<Mode>("key");
   const [completed, setCompleted] = useState<boolean[]>([]);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
 
   // Blank mode state
   const [blankAnswers, setBlankAnswers] = useState<Record<string, string>>({});
@@ -61,6 +62,18 @@ export default function Home() {
     });
   }, [activeBlock]);
 
+  const resetAll = useCallback(() => {
+    setCompleted(new Array(blocks.length).fill(false));
+    localStorage.removeItem("justee-completed");
+    setActiveBlock(0);
+    setActiveMode("key");
+    setBlankAnswers({});
+    setBlankChecked(false);
+    setRoleplayInput("");
+    setRoleplayFeedback(null);
+    setShowResetConfirm(false);
+  }, []);
+
   const resetBlanks = useCallback(() => {
     setBlankAnswers({});
     setBlankChecked(false);
@@ -99,7 +112,20 @@ export default function Home() {
     <div className="flex flex-col h-full max-w-lg mx-auto">
       {/* Header */}
       <header className="bg-primary text-white px-4 py-3 flex-shrink-0">
-        <h1 className="text-lg font-bold text-center">JUST EE 전도폭발 암기</h1>
+        <div className="flex items-center justify-between">
+          <div className="w-8" />
+          <h1 className="text-lg font-bold text-center">JUST EE 전도폭발 암기</h1>
+          <button
+            onClick={() => setShowResetConfirm(true)}
+            className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/20 transition-colors"
+            title="초기화"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+              <path d="M3 3v5h5" />
+            </svg>
+          </button>
+        </div>
         {/* Progress bar */}
         <div className="mt-2 bg-white/20 rounded-full h-2 overflow-hidden">
           <div
@@ -111,6 +137,32 @@ export default function Home() {
           진행률 {progress}%
         </p>
       </header>
+
+      {/* Reset confirmation modal */}
+      {showResetConfirm && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center px-8">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl">
+            <h3 className="text-base font-bold text-gray-900 mb-2">진행률 초기화</h3>
+            <p className="text-sm text-gray-600 mb-5">
+              모든 블록의 완료 상태가 초기화됩니다. 계속하시겠습니까?
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowResetConfirm(false)}
+                className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl text-sm font-semibold"
+              >
+                취소
+              </button>
+              <button
+                onClick={resetAll}
+                className="flex-1 py-2.5 bg-red-500 text-white rounded-xl text-sm font-semibold active:bg-red-600"
+              >
+                초기화
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Block tabs - horizontal scroll */}
       <nav className="flex-shrink-0 bg-white border-b border-gray-200 overflow-x-auto hide-scrollbar">
@@ -389,6 +441,73 @@ function RoleplayMode({
   onCheck: () => void;
   onReset: () => void;
 }) {
+  const [inputMode, setInputMode] = useState<"text" | "voice">("text");
+  const [isListening, setIsListening] = useState(false);
+  const [speechSupported, setSpeechSupported] = useState(false);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
+
+  useEffect(() => {
+    const supported =
+      typeof window !== "undefined" &&
+      ("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
+    setSpeechSupported(supported);
+  }, []);
+
+  const startListening = useCallback(() => {
+    if (!speechSupported) return;
+
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+    recognition.lang = "ko-KR";
+    recognition.continuous = true;
+    recognition.interimResults = true;
+
+    let finalTranscript = input;
+
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      let interim = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalTranscript += transcript;
+        } else {
+          interim = transcript;
+        }
+      }
+      setInput(finalTranscript + interim);
+    };
+
+    recognition.onerror = () => {
+      setIsListening(false);
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+
+    recognitionRef.current = recognition;
+    recognition.start();
+    setIsListening(true);
+  }, [speechSupported, input, setInput]);
+
+  const stopListening = useCallback(() => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
+    setIsListening(false);
+  }, []);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+    };
+  }, []);
+
   return (
     <div className="space-y-4">
       <p className="text-xs text-gray-500">
@@ -425,6 +544,35 @@ function RoleplayMode({
         <div className="flex-1 h-px bg-gray-200" />
       </div>
 
+      {/* Input mode toggle */}
+      {speechSupported && (
+        <div className="flex bg-gray-100 rounded-lg p-0.5">
+          <button
+            onClick={() => {
+              setInputMode("text");
+              stopListening();
+            }}
+            className={`flex-1 py-2 text-xs font-medium rounded-md transition-colors ${
+              inputMode === "text"
+                ? "bg-white text-gray-900 shadow-sm"
+                : "text-gray-500"
+            }`}
+          >
+            타이핑
+          </button>
+          <button
+            onClick={() => setInputMode("voice")}
+            className={`flex-1 py-2 text-xs font-medium rounded-md transition-colors ${
+              inputMode === "voice"
+                ? "bg-white text-gray-900 shadow-sm"
+                : "text-gray-500"
+            }`}
+          >
+            음성인식
+          </button>
+        </div>
+      )}
+
       {/* Practice prompt */}
       <div className="bg-gray-100 rounded-xl p-3 mr-8">
         <span className="text-xs font-semibold text-gray-500">대상자</span>
@@ -433,16 +581,66 @@ function RoleplayMode({
         </p>
       </div>
 
-      {/* User input */}
+      {/* User input area */}
       <div className="ml-4">
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="전도자로서 응답을 입력하세요..."
-          rows={4}
-          className="w-full border border-gray-200 rounded-xl p-3 text-sm outline-none focus:border-primary resize-none bg-white"
-          disabled={feedback !== null}
-        />
+        {inputMode === "text" ? (
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="전도자로서 응답을 입력하세요..."
+            rows={4}
+            className="w-full border border-gray-200 rounded-xl p-3 text-sm outline-none focus:border-primary resize-none bg-white"
+            disabled={feedback !== null}
+          />
+        ) : (
+          <div className="space-y-3">
+            {/* Voice input display */}
+            <div
+              className={`w-full min-h-[100px] border rounded-xl p-3 text-sm bg-white ${
+                isListening ? "border-primary" : "border-gray-200"
+              }`}
+            >
+              {input ? (
+                <p className="text-gray-800 leading-relaxed">{input}</p>
+              ) : (
+                <p className="text-gray-400">
+                  {isListening
+                    ? "듣고 있습니다..."
+                    : "마이크 버튼을 눌러 말씀하세요"}
+                </p>
+              )}
+            </div>
+
+            {/* Mic button */}
+            {feedback === null && (
+              <div className="flex justify-center">
+                <button
+                  onClick={isListening ? stopListening : startListening}
+                  className={`w-16 h-16 rounded-full flex items-center justify-center transition-all ${
+                    isListening
+                      ? "bg-red-500 text-white animate-pulse"
+                      : "bg-primary text-white active:bg-primary-dark"
+                  }`}
+                >
+                  {isListening ? (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
+                      <rect x="6" y="6" width="12" height="12" rx="2" />
+                    </svg>
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                      <line x1="12" x2="12" y1="19" y2="22" />
+                    </svg>
+                  )}
+                </button>
+              </div>
+            )}
+            <p className="text-xs text-gray-400 text-center">
+              {isListening ? "말씀을 멈추시면 자동으로 인식됩니다" : "탭하여 음성 입력 시작"}
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Feedback */}
@@ -461,7 +659,10 @@ function RoleplayMode({
       <div className="flex gap-2">
         {feedback === null ? (
           <button
-            onClick={onCheck}
+            onClick={() => {
+              stopListening();
+              onCheck();
+            }}
             disabled={!input.trim()}
             className="flex-1 py-3 bg-primary text-white rounded-xl text-sm font-semibold active:bg-primary-dark disabled:opacity-40"
           >
