@@ -2,10 +2,64 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { blocks } from "@/data/blocks";
-import type { Block, BlankQuestion } from "@/data/blocks";
-import { generateBlanksFromScript } from "@/utils/generateBlanks";
+import type { Block, BlankQuestion, KeyLine } from "@/data/blocks";
 
 type Mode = "key" | "full" | "blank" | "roleplay";
+
+const SKIP_WORDS = new Set([
+  "은", "는", "이", "가", "을", "를", "의", "에", "로", "와", "과",
+  "도", "만", "까지", "부터", "에서", "으로", "그래서", "그런데",
+  "그", "저", "것", "수", "때", "중", "더", "안", "못", "잘",
+  "및", "또", "다", "한", "할", "합", "네", "예", "아", "오",
+  "즉", "그리고", "하지만", "그러면", "그러나", "이와", "같이",
+  "위하여", "때문에", "통해", "위해", "대한", "위해서",
+]);
+
+/** 핵심문장(keyLines)에서 중요 단어를 랜덤 빈칸으로 만드는 함수 */
+function generateBlanksFromKeyLines(keyLines: KeyLine[]): BlankQuestion[] {
+  // 셔플 후 최대 4개 선택
+  const shuffled = [...keyLines].sort(() => Math.random() - 0.5);
+  const selected = shuffled.slice(0, Math.min(4, shuffled.length));
+
+  return selected.map((kl) => {
+    const text = kl.text.replace(/\([^)]+\)/g, "").trim(); // 행동 지시 제거
+    const tokens = text.split(/\s+/);
+
+    // 빈칸 후보: 2글자 이상, SKIP_WORDS에 없는 단어
+    const candidates: number[] = [];
+    tokens.forEach((token, idx) => {
+      const clean = token.replace(/["""''.,!?;:()【】]/g, "");
+      if (clean.length >= 2 && !SKIP_WORDS.has(clean)) {
+        candidates.push(idx);
+      }
+    });
+
+    // 랜덤으로 1~2개 빈칸 선택
+    const blankCount = Math.min(candidates.length >= 3 ? 2 : 1, candidates.length);
+    const selectedIndices = [...candidates]
+      .sort(() => Math.random() - 0.5)
+      .slice(0, blankCount)
+      .sort((a, b) => a - b);
+
+    const answers: Record<string, string> = {};
+    const labels = ["A", "B", "C"];
+
+    const resultTokens = tokens.map((token, idx) => {
+      const labelIdx = selectedIndices.indexOf(idx);
+      if (labelIdx === -1) return token;
+
+      const clean = token.replace(/["""''.,!?;:()【】]/g, "");
+      const prefix = token.match(/^["""''(【]*/)?.[0] || "";
+      const suffix = token.slice(prefix.length + clean.length);
+      const label = labels[labelIdx];
+      answers[label] = clean;
+
+      return `${prefix}[${label}]${suffix}`;
+    });
+
+    return { text: resultTokens.join(" "), answers };
+  });
+}
 
 const MODE_LABELS: Record<Mode, string> = {
   key: "핵심 문장",
@@ -114,21 +168,34 @@ export default function Home() {
     [resetBlanks, resetRoleplay]
   );
 
-  // Group roleplay lines into pairs: [전도자 expected line, 대상자 response (optional)]
-  const roleplayPairs = (() => {
-    const pairs: { expected: string; response: string | null }[] = [];
+  // 세그먼트 방식: context(미리보기) + key(사용자 입력) + response(대상자 응답)
+  type RoleplaySegment = {
+    context: { speaker: string; line: string }[];
+    expected: string;
+    response: string | null;
+  };
+  const roleplaySegments: RoleplaySegment[] = (() => {
+    const segments: RoleplaySegment[] = [];
     const rp = block.roleplay;
+    let context: { speaker: string; line: string }[] = [];
+
     for (let i = 0; i < rp.length; i++) {
-      if (rp[i].speaker === "전도자") {
+      if (rp[i].speaker === "전도자" && rp[i].key) {
         const response = (i + 1 < rp.length && rp[i + 1].speaker === "대상자")
-          ? rp[i + 1].line
-          : null;
-        pairs.push({ expected: rp[i].line, response });
-        if (response !== null) i++; // skip the 대상자 line
+          ? rp[i + 1].line : null;
+        segments.push({ context: [...context], expected: rp[i].line, response });
+        context = [];
+        if (response !== null) i++;
+      } else {
+        context.push({ speaker: rp[i].speaker, line: rp[i].line });
       }
     }
-    return pairs;
+    // 남은 context가 있으면 마지막 세그먼트에 붙이거나 무시
+    return segments;
   })();
+
+  // backward compat alias for checkRoleplay
+  const roleplayPairs = roleplaySegments;
 
   const checkRoleplay = useCallback(() => {
     const currentPair = roleplayPairs[roleplayStep];
@@ -174,17 +241,21 @@ export default function Home() {
   }, [roleplayPairs, roleplayStep, roleplayInput]);
 
   const advanceRoleplay = useCallback(() => {
-    const currentPair = roleplayPairs[roleplayStep];
-    if (!currentPair) return;
+    const currentSeg = roleplaySegments[roleplayStep];
+    if (!currentSeg) return;
     setRoleplayHistory((prev) => [
       ...prev,
+      // 컨텍스트 라인을 미리보기로 히스토리에 추가
+      ...(currentSeg.context.length > 0
+        ? [{ speaker: "미리보기", line: currentSeg.context.map(c => `${c.speaker === "전도자" ? "전" : "대"}: ${c.line}`).join("\n") }]
+        : []),
       { speaker: "전도자", line: roleplayInput },
-      ...(currentPair.response ? [{ speaker: "대상자", line: currentPair.response }] : []),
+      ...(currentSeg.response ? [{ speaker: "대상자", line: currentSeg.response }] : []),
     ]);
     setRoleplayStep((s) => s + 1);
     setRoleplayInput("");
     setRoleplayFeedback(null);
-  }, [roleplayPairs, roleplayStep, roleplayInput]);
+  }, [roleplaySegments, roleplayStep, roleplayInput]);
 
   // Auto-advance after success feedback
   useEffect(() => {
@@ -328,7 +399,7 @@ export default function Home() {
         {activeMode === "roleplay" && (
           <RoleplayMode
             block={block}
-            pairs={roleplayPairs}
+            segments={roleplaySegments}
             step={roleplayStep}
             history={roleplayHistory}
             input={roleplayInput}
@@ -435,17 +506,17 @@ function BlankMode({
   onReset: () => void;
   seed: number;
 }) {
-  // seed가 바뀔 때마다 전문에서 새로운 랜덤 문제 생성
+  // seed가 바뀔 때마다 핵심문장에서 새로운 랜덤 빈칸 문제 생성
   const [questions, setQuestions] = useState<BlankQuestion[]>([]);
 
   useEffect(() => {
-    setQuestions(generateBlanksFromScript(block.fullScript, 4));
+    setQuestions(generateBlanksFromKeyLines(block.keyLines));
   }, [block.fullScript, seed]);
 
   return (
     <div className="space-y-4">
       <p className="text-xs text-gray-500">
-        전문에서 랜덤 출제됩니다. 빈칸에 알맞은 단어를 입력하세요.
+        핵심 문장에서 랜덤 출제됩니다. 빈칸에 알맞은 단어를 입력하세요.
       </p>
       {questions.map((q, qi) => (
         <BlankQuestionCard
@@ -545,7 +616,7 @@ function BlankQuestionCard({
 
 function RoleplayMode({
   block,
-  pairs,
+  segments,
   step,
   history,
   input,
@@ -558,7 +629,7 @@ function RoleplayMode({
   onShowFull,
 }: {
   block: Block;
-  pairs: { expected: string; response: string | null }[];
+  segments: { context: { speaker: string; line: string }[]; expected: string; response: string | null }[];
   step: number;
   history: { speaker: string; line: string }[];
   input: string;
@@ -570,13 +641,13 @@ function RoleplayMode({
   onReset: () => void;
   onShowFull: () => void;
 }) {
-  const isComplete = step >= pairs.length;
-  const currentPair = pairs[step];
+  const isComplete = step >= segments.length;
+  const currentSegment = segments[step];
 
   return (
     <div className="space-y-4">
       <p className="text-xs text-gray-500">
-        전도자로서 순서대로 말해 보세요 ({isComplete ? pairs.length : step + 1}/{pairs.length})
+        핵심 문장을 말해 보세요 ({isComplete ? segments.length : step + 1}/{segments.length})
       </p>
 
       {/* Conversation history */}
@@ -586,17 +657,23 @@ function RoleplayMode({
           className={`rounded-xl p-3 ${
             entry.speaker === "대상자"
               ? "bg-gray-100 mr-8"
+              : entry.speaker === "미리보기"
+              ? "bg-gray-50 border border-gray-200 border-dashed"
               : "bg-primary-light ml-8"
           }`}
         >
           <span
             className={`text-xs font-semibold ${
-              entry.speaker === "대상자" ? "text-gray-500" : "text-primary"
+              entry.speaker === "대상자" ? "text-gray-500"
+              : entry.speaker === "미리보기" ? "text-gray-400"
+              : "text-primary"
             }`}
           >
-            {entry.speaker}
+            {entry.speaker === "미리보기" ? "💬 대화 흐름" : entry.speaker}
           </span>
-          <p className="text-sm mt-1 leading-relaxed text-gray-800">
+          <p className={`text-sm mt-1 leading-relaxed ${
+            entry.speaker === "미리보기" ? "text-gray-500" : "text-gray-800"
+          }`}>
             {entry.line}
           </p>
         </div>
@@ -606,7 +683,7 @@ function RoleplayMode({
       {isComplete && (
         <>
           <div className="bg-primary-light text-primary-text rounded-xl p-4 text-sm text-center">
-            모든 대화를 완료했습니다!
+            모든 핵심 문장을 완료했습니다!
           </div>
           <button
             onClick={onReset}
@@ -617,16 +694,32 @@ function RoleplayMode({
         </>
       )}
 
-      {/* Current turn - user types as 전도자 */}
-      {!isComplete && currentPair && (() => {
-        // 괄호 안의 행동 지시 추출
+      {/* Current turn */}
+      {!isComplete && currentSegment && (() => {
+        // 컨텍스트(미리보기) 표시
+        const contextLines = currentSegment.context;
+        // 행동 지시 추출
         const actions: string[] = [];
-        currentPair.expected.replace(/\(([^)]+)\)/g, (_, action) => {
+        currentSegment.expected.replace(/\(([^)]+)\)/g, (_, action) => {
           actions.push(action);
           return "";
         });
         return (
         <>
+          {/* Context preview */}
+          {contextLines.length > 0 && (
+            <div className="bg-gray-50 border border-gray-200 border-dashed rounded-xl p-3 space-y-1.5">
+              <span className="text-xs font-semibold text-gray-400">💬 앞부분 대화 흐름</span>
+              {contextLines.map((cl, i) => (
+                <p key={i} className={`text-xs leading-relaxed ${
+                  cl.speaker === "대상자" ? "text-gray-400 italic" : "text-gray-500"
+                }`}>
+                  <span className="font-medium">{cl.speaker === "전도자" ? "전:" : "대:"}</span> {cl.line}
+                </p>
+              ))}
+            </div>
+          )}
+
           {/* Action hints */}
           {actions.length > 0 && (
             <div className="ml-4 flex flex-wrap gap-1.5">
@@ -640,11 +733,11 @@ function RoleplayMode({
 
           {/* User input area */}
           <div className="ml-4">
-            <div className="text-xs font-semibold text-primary mb-1">전도자 (내 차례)</div>
+            <div className="text-xs font-semibold text-primary mb-1">전도자 (내 차례) — 핵심 문장</div>
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="전도자로서 말할 내용을 입력하세요..."
+              placeholder="핵심 문장을 입력하세요..."
               rows={4}
               className="w-full border border-gray-200 rounded-xl p-3 text-sm outline-none focus:border-primary resize-none bg-white"
               disabled={feedback !== null}
@@ -654,14 +747,14 @@ function RoleplayMode({
           {/* Feedback */}
           {feedback === "success" && (
             <div className="bg-primary-light text-primary-text rounded-xl p-3 text-sm text-center">
-              잘하셨습니다! {step + 1 < pairs.length ? "다음 대화로 넘어갑니다..." : "완료합니다..."}
+              잘하셨습니다! {step + 1 < segments.length ? "다음으로 넘어갑니다..." : "완료합니다..."}
             </div>
           )}
           {feedback === "retry" && (
             <div className="bg-error text-error-text rounded-xl p-3 text-sm space-y-2">
               <p>핵심 키워드가 부족합니다. 아래 모범 답안을 참고해 보세요.</p>
               <div className="bg-white/50 rounded-lg p-2 text-xs leading-relaxed text-gray-700">
-                {currentPair.expected}
+                {currentSegment.expected}
               </div>
               <div className="flex gap-2 pt-1">
                 <button
