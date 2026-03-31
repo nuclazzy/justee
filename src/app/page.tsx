@@ -133,15 +133,43 @@ export default function Home() {
   const checkRoleplay = useCallback(() => {
     const currentPair = roleplayPairs[roleplayStep];
     if (!currentPair) return;
-    // Check if answer contains key phrases (first 4 chars of each sentence fragment)
-    const answerFragments = currentPair.expected
-      .split(/[.,!?·]/)
+
+    const SKIP = new Set([
+      "은", "는", "이", "가", "을", "를", "의", "에", "로", "와", "과",
+      "도", "만", "까지", "부터", "에서", "으로", "그래서", "그런데",
+      "그", "이", "저", "것", "수", "때", "중", "더", "안", "못", "잘",
+      "전", "대", "및", "또", "다", "한", "할", "합", "네", "예", "아",
+      "오", "즉", "그리고", "하지만", "그러면", "그러나",
+    ]);
+
+    // 괄호 안의 행동 지시를 제거한 후 문장 단위로 분리
+    const textOnly = currentPair.expected.replace(/\([^)]+\)/g, "").trim();
+    const sentences = textOnly
+      .split(/[.,!?;]\s*/)
       .map((s) => s.trim())
-      .filter((s) => s.length >= 4);
-    const matched = answerFragments.filter((frag) =>
-      roleplayInput.includes(frag.substring(0, 4))
-    );
-    const isSuccess = matched.length >= 1;
+      .filter((s) => s.length > 0);
+
+    const keywords: string[] = [];
+    for (const sentence of sentences) {
+      const words = sentence
+        .replace(/["""''()【】]/g, "")
+        .split(/\s+/)
+        .filter((w) => w.length >= 2 && !SKIP.has(w));
+      // 각 문장에서 가장 긴 단어(핵심어)를 최소 1개 선택
+      if (words.length > 0) {
+        const sorted = [...words].sort((a, b) => b.length - a.length);
+        // 문장당 1~2개 핵심 단어 (단어가 3개 이상이면 2개)
+        const pick = words.length >= 3 ? 2 : 1;
+        keywords.push(...sorted.slice(0, pick));
+      }
+    }
+
+    // 중복 제거
+    const uniqueKeywords = [...new Set(keywords)];
+
+    // 모든 핵심 단어가 입력에 포함되어야 함
+    const matched = uniqueKeywords.filter((kw) => roleplayInput.includes(kw));
+    const isSuccess = uniqueKeywords.length > 0 && matched.length === uniqueKeywords.length;
     setRoleplayFeedback(isSuccess ? "success" : "retry");
   }, [roleplayPairs, roleplayStep, roleplayInput]);
 
@@ -217,7 +245,7 @@ export default function Home() {
           <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl">
             <h3 className="text-base font-bold text-gray-900 mb-2">진행률 초기화</h3>
             <p className="text-sm text-gray-600 mb-5">
-              모든 블록의 완료 상태가 초기화됩니다. 계속하시겠습니까?
+              모든 학습 진행률이 초기화됩니다. 계속하시겠습니까?
             </p>
             <div className="flex gap-3">
               <button
@@ -251,7 +279,7 @@ export default function Home() {
               }`}
             >
               {completed[i] && "✓ "}
-              블록 {i + 1}
+              {b.title}
             </button>
           ))}
         </div>
@@ -313,6 +341,7 @@ export default function Home() {
               setRoleplayFeedback(null);
             }}
             onReset={resetRoleplay}
+            onShowFull={() => setActiveMode("full")}
           />
         )}
       </main>
@@ -329,7 +358,7 @@ export default function Home() {
         >
           {completed[activeBlock]
             ? "✓ 완료됨 (탭하여 취소)"
-            : "✓ 이 블록 완료"}
+            : "✓ 완료"}
         </button>
       </div>
     </div>
@@ -526,6 +555,7 @@ function RoleplayMode({
   onAdvance,
   onRetry,
   onReset,
+  onShowFull,
 }: {
   block: Block;
   pairs: { expected: string; response: string | null }[];
@@ -538,6 +568,7 @@ function RoleplayMode({
   onAdvance: () => void;
   onRetry: () => void;
   onReset: () => void;
+  onShowFull: () => void;
 }) {
   const isComplete = step >= pairs.length;
   const currentPair = pairs[step];
@@ -587,8 +618,26 @@ function RoleplayMode({
       )}
 
       {/* Current turn - user types as 전도자 */}
-      {!isComplete && currentPair && (
+      {!isComplete && currentPair && (() => {
+        // 괄호 안의 행동 지시 추출
+        const actions: string[] = [];
+        currentPair.expected.replace(/\(([^)]+)\)/g, (_, action) => {
+          actions.push(action);
+          return "";
+        });
+        return (
         <>
+          {/* Action hints */}
+          {actions.length > 0 && (
+            <div className="ml-4 flex flex-wrap gap-1.5">
+              {actions.map((action, i) => (
+                <span key={i} className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1">
+                  ({action})
+                </span>
+              ))}
+            </div>
+          )}
+
           {/* User input area */}
           <div className="ml-4">
             <div className="text-xs font-semibold text-primary mb-1">전도자 (내 차례)</div>
@@ -614,6 +663,20 @@ function RoleplayMode({
               <div className="bg-white/50 rounded-lg p-2 text-xs leading-relaxed text-gray-700">
                 {currentPair.expected}
               </div>
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={onRetry}
+                  className="flex-1 py-2.5 bg-white text-gray-700 rounded-xl text-sm font-semibold border border-gray-200"
+                >
+                  다시 시도
+                </button>
+                <button
+                  onClick={onShowFull}
+                  className="flex-1 py-2.5 bg-primary text-white rounded-xl text-sm font-semibold active:bg-primary-dark"
+                >
+                  전문 보기
+                </button>
+              </div>
             </div>
           )}
 
@@ -628,25 +691,10 @@ function RoleplayMode({
                 확인하기
               </button>
             )}
-            {feedback === "retry" && (
-              <>
-                <button
-                  onClick={onRetry}
-                  className="flex-1 py-3 bg-gray-200 text-gray-700 rounded-xl text-sm font-semibold"
-                >
-                  다시 입력
-                </button>
-                <button
-                  onClick={onAdvance}
-                  className="flex-1 py-3 bg-primary text-white rounded-xl text-sm font-semibold active:bg-primary-dark"
-                >
-                  {step + 1 < pairs.length ? "다음 대화" : "완료"}
-                </button>
-              </>
-            )}
           </div>
         </>
-      )}
+        );
+      })()}
     </div>
   );
 }
