@@ -460,6 +460,12 @@ function RoleplayMode({
   const [isListening, setIsListening] = useState(false);
   const [speechSupported, setSpeechSupported] = useState(false);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const inputRef = useRef(input);
+
+  // Keep ref in sync with latest input value
+  useEffect(() => {
+    inputRef.current = input;
+  }, [input]);
 
   useEffect(() => {
     const supported =
@@ -471,30 +477,36 @@ function RoleplayMode({
   const startListening = useCallback(() => {
     if (!speechSupported) return;
 
-    const SpeechRecognition =
+    // Stop any existing recognition first
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
+
+    const SpeechRecognitionCtor =
       window.SpeechRecognition || window.webkitSpeechRecognition;
-    const recognition = new SpeechRecognition();
+    const recognition = new SpeechRecognitionCtor();
     recognition.lang = "ko-KR";
-    recognition.continuous = true;
+    recognition.continuous = false;
     recognition.interimResults = true;
 
-    let finalTranscript = input;
-
     recognition.onresult = (event: SpeechRecognitionEvent) => {
-      let interim = "";
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript;
-        if (event.results[i].isFinal) {
-          finalTranscript += transcript;
-        } else {
-          interim = transcript;
-        }
+      let transcript = "";
+      for (let i = 0; i < event.results.length; i++) {
+        transcript += event.results[i][0].transcript;
       }
-      setInput(finalTranscript + interim);
+      // Append to existing text using ref for latest value
+      const base = inputRef.current;
+      const separator = base && !base.endsWith(" ") ? " " : "";
+      setInput(base + separator + transcript);
     };
 
-    recognition.onerror = () => {
-      setIsListening(false);
+    recognition.onerror = (e: Event) => {
+      const errorEvent = e as Event & { error?: string };
+      // "no-speech" is not a real error, just no input detected
+      if (errorEvent.error !== "no-speech") {
+        setIsListening(false);
+      }
     };
 
     recognition.onend = () => {
@@ -502,13 +514,23 @@ function RoleplayMode({
     };
 
     recognitionRef.current = recognition;
-    recognition.start();
-    setIsListening(true);
-  }, [speechSupported, input, setInput]);
+
+    try {
+      recognition.start();
+      setIsListening(true);
+    } catch {
+      // Already started or other error
+      setIsListening(false);
+    }
+  }, [speechSupported, setInput]);
 
   const stopListening = useCallback(() => {
     if (recognitionRef.current) {
-      recognitionRef.current.stop();
+      try {
+        recognitionRef.current.stop();
+      } catch {
+        // Ignore errors on stop
+      }
       recognitionRef.current = null;
     }
     setIsListening(false);
@@ -518,7 +540,11 @@ function RoleplayMode({
   useEffect(() => {
     return () => {
       if (recognitionRef.current) {
-        recognitionRef.current.stop();
+        try {
+          recognitionRef.current.stop();
+        } catch {
+          // Ignore
+        }
       }
     };
   }, []);
@@ -652,8 +678,20 @@ function RoleplayMode({
               </div>
             )}
             <p className="text-xs text-gray-400 text-center">
-              {isListening ? "말씀을 멈추시면 자동으로 인식됩니다" : "탭하여 음성 입력 시작"}
+              {isListening
+                ? "말씀을 멈추시면 자동으로 인식됩니다"
+                : input
+                ? "다시 탭하면 이어서 녹음됩니다"
+                : "탭하여 음성 입력 시작"}
             </p>
+            {input && !isListening && feedback === null && (
+              <button
+                onClick={() => setInput("")}
+                className="w-full py-2 text-xs text-gray-400 underline"
+              >
+                입력 내용 지우기
+              </button>
+            )}
           </div>
         )}
       </div>
