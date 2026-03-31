@@ -138,7 +138,8 @@ export default function Home() {
     const matched = answerFragments.filter((frag) =>
       roleplayInput.includes(frag.substring(0, 4))
     );
-    setRoleplayFeedback(matched.length >= 1 ? "success" : "retry");
+    const isSuccess = matched.length >= 1;
+    setRoleplayFeedback(isSuccess ? "success" : "retry");
   }, [roleplayPairs, roleplayStep, roleplayInput]);
 
   const advanceRoleplay = useCallback(() => {
@@ -153,6 +154,16 @@ export default function Home() {
     setRoleplayInput("");
     setRoleplayFeedback(null);
   }, [roleplayPairs, roleplayStep, roleplayInput]);
+
+  // Auto-advance after success feedback
+  useEffect(() => {
+    if (roleplayFeedback === "success") {
+      const timer = setTimeout(() => {
+        advanceRoleplay();
+      }, 1200);
+      return () => clearTimeout(timer);
+    }
+  }, [roleplayFeedback, advanceRoleplay]);
 
   return (
     <div className="flex flex-col h-full max-w-lg mx-auto">
@@ -596,8 +607,8 @@ function RoleplayMode({
 
           {/* Feedback */}
           {feedback === "success" && (
-            <div className="bg-primary-light text-primary-text rounded-xl p-3 text-sm">
-              잘하셨습니다! 핵심 내용이 포함되어 있습니다.
+            <div className="bg-primary-light text-primary-text rounded-xl p-3 text-sm text-center">
+              잘하셨습니다! {step + 1 < pairs.length ? "다음 대화로 넘어갑니다..." : "완료합니다..."}
             </div>
           )}
           {feedback === "retry" && (
@@ -611,7 +622,7 @@ function RoleplayMode({
 
           {/* Actions */}
           <div className="flex gap-2">
-            {feedback === null ? (
+            {feedback === null && (
               <button
                 onClick={onCheck}
                 disabled={!input.trim()}
@@ -619,7 +630,8 @@ function RoleplayMode({
               >
                 확인하기
               </button>
-            ) : (
+            )}
+            {feedback === "retry" && (
               <>
                 <button
                   onClick={onRetry}
