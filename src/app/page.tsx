@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { blocks } from "@/data/blocks";
 import type { Block, BlankQuestion } from "@/data/blocks";
+import { generateBlanksFromScript } from "@/utils/generateBlanks";
 
 type Mode = "key" | "full" | "blank" | "roleplay";
 
@@ -22,6 +23,7 @@ export default function Home() {
   // Blank mode state
   const [blankAnswers, setBlankAnswers] = useState<Record<string, string>>({});
   const [blankChecked, setBlankChecked] = useState(false);
+  const [blankSeed, setBlankSeed] = useState(0);
 
   // Roleplay mode state
   const [roleplayInput, setRoleplayInput] = useState("");
@@ -74,9 +76,12 @@ export default function Home() {
     setShowResetConfirm(false);
   }, []);
 
-  const resetBlanks = useCallback(() => {
+  const resetBlanks = useCallback((regenerate = false) => {
     setBlankAnswers({});
     setBlankChecked(false);
+    if (regenerate) {
+      setBlankSeed((s) => s + 1);
+    }
   }, []);
 
   const handleBlockChange = useCallback(
@@ -220,7 +225,8 @@ export default function Home() {
             setAnswers={setBlankAnswers}
             checked={blankChecked}
             onCheck={() => setBlankChecked(true)}
-            onReset={resetBlanks}
+            onReset={() => resetBlanks(true)}
+            seed={blankSeed}
           />
         )}
         {activeMode === "roleplay" && (
@@ -317,6 +323,7 @@ function BlankMode({
   checked,
   onCheck,
   onReset,
+  seed,
 }: {
   block: Block;
   answers: Record<string, string>;
@@ -324,15 +331,23 @@ function BlankMode({
   checked: boolean;
   onCheck: () => void;
   onReset: () => void;
+  seed: number;
 }) {
+  // seed가 바뀔 때마다 전문에서 새로운 랜덤 문제 생성
+  const [questions, setQuestions] = useState<BlankQuestion[]>([]);
+
+  useEffect(() => {
+    setQuestions(generateBlanksFromScript(block.fullScript, 4));
+  }, [block.fullScript, seed]);
+
   return (
     <div className="space-y-4">
       <p className="text-xs text-gray-500">
-        빈칸에 알맞은 단어를 입력하세요
+        전문에서 랜덤 출제됩니다. 빈칸에 알맞은 단어를 입력하세요.
       </p>
-      {block.blanks.map((q, qi) => (
+      {questions.map((q, qi) => (
         <BlankQuestionCard
-          key={qi}
+          key={`${seed}-${qi}`}
           question={q}
           questionIndex={qi}
           answers={answers}
@@ -353,7 +368,7 @@ function BlankMode({
             onClick={onReset}
             className="flex-1 py-3 bg-gray-200 text-gray-700 rounded-xl text-sm font-semibold"
           >
-            다시 풀기
+            새 문제 풀기
           </button>
         )}
       </div>
