@@ -15,38 +15,8 @@ const SKIP_WORDS = new Set([
   "위하여", "때문에", "통해", "위해", "대한", "위해서",
 ]);
 
-/** 한국어 조사/어미를 제거하여 핵심 단어만 추출 */
-function stripParticle(word: string): string {
-  const suffixes = [
-    "하셨습니다", "되셨습니다", "하였습니다", "받았습니다", "드렸습니다",
-    "시키셨도다", "치르셨습니다", "옮기셨습니다",
-    "하십시오", "하겠다는", "드립니다", "하십니다", "주십시오",
-    "하셔야만", "우셔서는",
-    "입니까", "습니까", "십니까",
-    "입니다", "습니다", "십니다",
-    "이십니다", "우시기", "으셔서", "하시는", "하셨다",
-    "으셨다", "하셔서", "으셔야", "로우셔서",
-    "주시는", "주신다", "주셔야만",
-    "에서는", "에게로", "으로써", "에게는",
-    "이심이라", "로우시기",
-    "하여", "하는", "하고", "에서", "에게", "으로",
-    "이라", "이요", "이며", "이기",
-    "셔서", "셔야",
-    "에는", "에도", "까지", "부터", "으면",
-    "은", "는", "이", "가", "을", "를", "의", "에", "로",
-    "와", "과", "도", "만",
-  ];
-  for (const suffix of suffixes) {
-    if (word.endsWith(suffix) && word.length > suffix.length) {
-      const core = word.slice(0, -suffix.length);
-      if (core.length >= 2) return core;
-    }
-  }
-  return word;
-}
-
-/** 핵심문장(keyLines)에서 중요 단어를 랜덤 빈칸으로 만드는 함수 (전문 표시용) */
-type BlankWordInfo = { word: string; label: string; keyLineIdx: number; answer: string };
+/** 핵심문장(keyLines)에서 지정된 핵심 단어를 빈칸으로 만드는 함수 (전문 표시용) */
+type BlankWordInfo = { word: string; label: string; keyLineIdx: number; answer: string; suffix: string };
 type FullScriptBlankData = {
   blanks: BlankWordInfo[];
   answers: Record<string, string>;
@@ -61,33 +31,27 @@ function generateFullScriptBlanks(keyLines: KeyLine[]): FullScriptBlankData {
   const labels = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
   for (let ki = 0; ki < keyLines.length; ki++) {
-    const text = keyLines[ki].text.replace(/\([^)]+\)/g, "").trim();
+    const kl = keyLines[ki];
+    const text = kl.text.replace(/\([^)]+\)/g, "").trim();
     const tokens = text.split(/\s+/);
 
     const significant = tokens
       .map((t) => t.replace(/["""''.,!?;:()【】]/g, ""))
       .filter((w) => w.length >= 3 && !SKIP_WORDS.has(w));
-    // 매칭용 앵커 단어 (긴 순)
     anchorsByKeyLine.push(
       [...significant].sort((a, b) => b.length - a.length).slice(0, 6)
     );
 
-    // 빈칸 후보: 조사 제거 후 핵심 단어 기준으로 필터
-    const candidates = tokens
-      .map((t) => {
-        const clean = t.replace(/["""''.,!?;:()【】]/g, "");
-        return { original: clean, core: stripParticle(clean) };
-      })
-      .filter((w) => w.core.length >= 2 && !SKIP_WORDS.has(w.core));
-    const count = Math.min(candidates.length >= 3 ? 2 : 1, candidates.length);
-    const selected = [...candidates]
-      .sort(() => Math.random() - 0.5)
-      .slice(0, count);
-
-    for (const { original, core } of selected) {
-      const label = labels[labelIdx++];
-      blanks.push({ word: original, label, keyLineIdx: ki, answer: core });
-      answers[label] = core;
+    // blankTargets가 정의된 경우에만 빈칸 생성
+    if (kl.blankTargets && kl.blankTargets.length > 0) {
+      for (const target of kl.blankTargets) {
+        const label = labels[labelIdx++];
+        const suffix = target.word.startsWith(target.answer)
+          ? target.word.slice(target.answer.length)
+          : "";
+        blanks.push({ word: target.word, label, keyLineIdx: ki, answer: target.answer, suffix });
+        answers[label] = target.answer;
+      }
     }
   }
   return { blanks, answers, anchorsByKeyLine };
@@ -652,6 +616,9 @@ function BlankMode({
               minWidth: "50px",
             }}
           />
+          {blank.suffix && (
+            <span className="text-primary-dark font-medium">{blank.suffix}</span>
+          )}
           {isWrong && (
             <span className="text-xs text-red-500 ml-1">
               ({correctAnswer})
@@ -667,7 +634,7 @@ function BlankMode({
   return (
     <div className="space-y-1">
       <p className="text-xs text-gray-500 mb-3">
-        전문을 읽으며 핵심 문장의 빈칸을 채워 보세요. 빈칸은 매번 랜덤 배치됩니다.
+        전문을 읽으며 핵심 단어의 빈칸을 채워 보세요
       </p>
       <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100 space-y-1">
         {lines.map((line, i) => {
