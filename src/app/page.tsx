@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { blocks } from "@/data/blocks";
 import type { Block, KeyLine } from "@/data/blocks";
 
@@ -15,8 +15,38 @@ const SKIP_WORDS = new Set([
   "위하여", "때문에", "통해", "위해", "대한", "위해서",
 ]);
 
+/** 한국어 조사/어미를 제거하여 핵심 단어만 추출 */
+function stripParticle(word: string): string {
+  const suffixes = [
+    "하셨습니다", "되셨습니다", "하였습니다", "받았습니다", "드렸습니다",
+    "시키셨도다", "치르셨습니다", "옮기셨습니다",
+    "하십시오", "하겠다는", "드립니다", "하십니다", "주십시오",
+    "하셔야만", "우셔서는",
+    "입니까", "습니까", "십니까",
+    "입니다", "습니다", "십니다",
+    "이십니다", "우시기", "으셔서", "하시는", "하셨다",
+    "으셨다", "하셔서", "으셔야", "로우셔서",
+    "주시는", "주신다", "주셔야만",
+    "에서는", "에게로", "으로써", "에게는",
+    "이심이라", "로우시기",
+    "하여", "하는", "하고", "에서", "에게", "으로",
+    "이라", "이요", "이며", "이기",
+    "셔서", "셔야",
+    "에는", "에도", "까지", "부터", "으면",
+    "은", "는", "이", "가", "을", "를", "의", "에", "로",
+    "와", "과", "도", "만",
+  ];
+  for (const suffix of suffixes) {
+    if (word.endsWith(suffix) && word.length > suffix.length) {
+      const core = word.slice(0, -suffix.length);
+      if (core.length >= 2) return core;
+    }
+  }
+  return word;
+}
+
 /** 핵심문장(keyLines)에서 중요 단어를 랜덤 빈칸으로 만드는 함수 (전문 표시용) */
-type BlankWordInfo = { word: string; label: string; keyLineIdx: number };
+type BlankWordInfo = { word: string; label: string; keyLineIdx: number; answer: string };
 type FullScriptBlankData = {
   blanks: BlankWordInfo[];
   answers: Record<string, string>;
@@ -42,19 +72,22 @@ function generateFullScriptBlanks(keyLines: KeyLine[]): FullScriptBlankData {
       [...significant].sort((a, b) => b.length - a.length).slice(0, 6)
     );
 
-    // 빈칸 후보
+    // 빈칸 후보: 조사 제거 후 핵심 단어 기준으로 필터
     const candidates = tokens
-      .map((t) => t.replace(/["""''.,!?;:()【】]/g, ""))
-      .filter((w) => w.length >= 2 && !SKIP_WORDS.has(w));
+      .map((t) => {
+        const clean = t.replace(/["""''.,!?;:()【】]/g, "");
+        return { original: clean, core: stripParticle(clean) };
+      })
+      .filter((w) => w.core.length >= 2 && !SKIP_WORDS.has(w.core));
     const count = Math.min(candidates.length >= 3 ? 2 : 1, candidates.length);
     const selected = [...candidates]
       .sort(() => Math.random() - 0.5)
       .slice(0, count);
 
-    for (const word of selected) {
+    for (const { original, core } of selected) {
       const label = labels[labelIdx++];
-      blanks.push({ word, label, keyLineIdx: ki });
-      answers[label] = word;
+      blanks.push({ word: original, label, keyLineIdx: ki, answer: core });
+      answers[label] = core;
     }
   }
   return { blanks, answers, anchorsByKeyLine };
@@ -173,25 +206,47 @@ export default function Home() {
     expected: string;
     response: string | null;
   };
-  const roleplaySegments: RoleplaySegment[] = (() => {
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const roleplaySegments: RoleplaySegment[] = useMemo(() => {
     const segments: RoleplaySegment[] = [];
     const rp = block.roleplay;
     let context: { speaker: string; line: string }[] = [];
+    // 분기 선택 결과를 다음 전도자 key 라인에 적용하기 위한 버퍼
+    let pendingBranchLine: string | null = null;
 
     for (let i = 0; i < rp.length; i++) {
-      if (rp[i].speaker === "전도자" && rp[i].key) {
-        const response = (i + 1 < rp.length && rp[i + 1].speaker === "대상자")
+      const line = rp[i];
+
+      // 대상자 분기 라인 처리
+      if (line.speaker === "대상자" && line.branch && line.branch.length > 0) {
+        const picked = line.branch[Math.floor(Math.random() * line.branch.length)];
+        context.push({ speaker: "대상자", line: picked.answer });
+        pendingBranchLine = picked.nextLine;
+        continue;
+      }
+
+      if (line.speaker === "전도자" && line.key) {
+        // 분기에 의해 expected가 결정된 경우
+        const expected = pendingBranchLine !== null ? pendingBranchLine : line.line;
+        pendingBranchLine = null;
+
+        // 빈 expected면 (분기 플레이스홀더) 스킵
+        if (!expected) continue;
+
+        const response = (i + 1 < rp.length && rp[i + 1].speaker === "대상자" && !rp[i + 1].branch)
           ? rp[i + 1].line : null;
-        segments.push({ context: [...context], expected: rp[i].line, response });
+        segments.push({ context: [...context], expected, response });
         context = [];
         if (response !== null) i++;
       } else {
-        context.push({ speaker: rp[i].speaker, line: rp[i].line });
+        if (line.line) {
+          context.push({ speaker: line.speaker, line: line.line });
+        }
       }
     }
-    // 남은 context가 있으면 마지막 세그먼트에 붙이거나 무시
     return segments;
-  })();
+    // blankSeed triggers re-randomization of branches on reset
+  }, [block.roleplay, blankSeed]);
 
   // backward compat alias for checkRoleplay
   const roleplayPairs = roleplaySegments;
@@ -555,7 +610,6 @@ function BlankMode({
     const lineBlanks = blankData.blanks.filter((b) => b.keyLineIdx === ki);
     if (lineBlanks.length === 0) return <span>{lineText}</span>;
 
-    // 빈칸 단어를 플레이스홀더로 교체
     let processed = lineText;
     const activeBlanks: BlankWordInfo[] = [];
     for (const blank of lineBlanks) {
@@ -571,7 +625,7 @@ function BlankMode({
       const blank = activeBlanks.find((b) => b.label === part);
       if (!blank) return <span key={i}>{part}</span>;
 
-      const correctAnswer = blankData.answers[blank.label];
+      const correctAnswer = blank.answer;
       const userAnswer = answers[blank.label] || "";
       const isCorrect = checked && userAnswer.trim() === correctAnswer;
       const isWrong = checked && userAnswer.trim() !== correctAnswer;
@@ -585,7 +639,7 @@ function BlankMode({
               setAnswers({ ...answers, [blank.label]: e.target.value })
             }
             disabled={checked}
-            placeholder={`(${blank.label})`}
+            placeholder="___"
             className={`border-b-2 text-center text-sm py-0.5 outline-none bg-transparent transition-colors ${
               !checked
                 ? "border-primary focus:border-primary-dark"
